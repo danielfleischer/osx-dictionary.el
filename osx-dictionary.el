@@ -7,7 +7,8 @@
 ;; URL: https://github.com/xuchunyang/osx-dictionary.el
 ;; Package-Requires: ((cl-lib "0.5"))
 ;; keywords: mac, dictionary
-;; Version: 0.4
+;; Package-Version: 20260906.1654
+;; Package-Revision: 655bca5cea78
 
 ;; This program is free software; you can redistribute it and/or modify
 ;; it under the terms of the GNU General Public License as published by
@@ -30,7 +31,9 @@
 ;;
 ;; Below are commands you can use:
 ;; `osx-dictionary-search-input'
-;; Search input word and display result with buffer
+;; Search an input word, using the word at point as the default and TAB for
+;; completion at point (`cape-dict' through `consult', out of the box), then
+;; display the result with buffer
 ;; `osx-dictionary-search-word-at-point'
 ;; Search word around and display result with buffer
 ;; `osx-dictionary-select-dictionary'
@@ -99,6 +102,36 @@ dropped.  Each entry is either:
                                        (string :tag "Real name")
                                        (string :tag "Display name")))))
   :group 'osx-dictionary)
+
+(defcustom osx-dictionary-completion-at-point-functions '(cape-dict)
+  "Completion functions TAB offers while reading a word to look up.
+They are used in place of the minibuffer's own
+`completion-at-point-functions'; nil keeps whatever it is configured
+with.  The default, `cape-dict', completes English words from the system
+word list and needs the `cape' package -- an entry whose package isn't
+installed is dropped rather than making TAB signal.
+
+How the candidates are then displayed is up to
+`osx-dictionary-completion-in-region-function'."
+  :type 'hook
+  :options '(cape-dict)
+  :group 'osx-dictionary)
+
+(defcustom osx-dictionary-completion-in-region-function 'auto
+  "How TAB displays word completions while reading a word to look up.
+`auto', the default, uses `consult-completion-in-region' when the
+`consult' package is installed -- it completes in a recursive minibuffer,
+so a UI like Vertico lists the candidates the way it lists everything
+else -- and leaves `completion-in-region-function' alone otherwise, which
+is also what nil always does (Emacs' own \"*Completions*\" buffer, unless
+something else has already replaced it).  Any other function is used as
+is."
+  :type '(choice (const :tag "consult, when it is installed" auto)
+                 (const :tag "Whatever Emacs is configured with" nil)
+                 (function :tag "Function"))
+  :group 'osx-dictionary)
+
+(declare-function consult-completion-in-region "ext:consult")
 
 (defun osx-dictionary--entry-real-name (entry)
   "Real, installed-dictionary name for ENTRY, an `osx-dictionary-allowed-dictionaries' element."
@@ -213,13 +246,13 @@ The function takes the WORD as the sole argument."
 (defvar osx-dictionary-mode-map
   (let ((map (make-sparse-keymap)))
     ;; Dictionary commands
-    (define-key map "q" 'osx-dictionary-quit)
-    (define-key map "s" 'osx-dictionary-search-input)
-    (define-key map "S" 'osx-dictionary-select-dictionary)
-    (define-key map "o" 'osx-dictionary-open-dictionary.app)
-    (define-key map "r" 'osx-dictionary-read-word)
+    (define-key map "q" #'osx-dictionary-quit)
+    (define-key map "s" #'osx-dictionary-search-input)
+    (define-key map "S" #'osx-dictionary-select-dictionary)
+    (define-key map "o" #'osx-dictionary-open-dictionary.app)
+    (define-key map "r" #'osx-dictionary-read-word)
     ;; Misc
-    (define-key map "?" 'describe-mode)
+    (define-key map "?" #'describe-mode)
     map)
   "Keymap for `osx-dictionary-mode'.")
 
@@ -233,13 +266,15 @@ Turning on Text mode runs the normal hook `osx-dictionary-mode-hook'."
 
   (setq header-line-format osx-dictionary-mode-header-line)
   (setq font-lock-defaults '(osx-dictionary-mode-font-lock-keywords))
+  ;; Do not call `read-only-mode' here: when `view-read-only' is non-nil it
+  ;; also enables `view-mode', whose minor-mode map shadows this mode's map.
+  (setq buffer-read-only t)
   ;; No fringe use here worth keeping (read-only prose, no VC/diagnostic
   ;; markers) -- and it otherwise threw off the header-line padding above,
   ;; since header-line-format ignores it just like it ignores margins.
   (setq-local left-fringe-width 0)
   (setq-local right-fringe-width 0))
 
-(add-hook 'osx-dictionary-mode-hook #'read-only-mode)
 (add-hook 'osx-dictionary-mode-hook #'visual-line-mode)
 
 (defun osx-dictionary-open-dictionary.app ()
@@ -405,13 +440,62 @@ hanging indent, see `osx-dictionary--indent-bullets'."
 
 ;;;###autoload
 (defun osx-dictionary-search-input ()
-  "Search input word and display result with buffer."
+  "Read a word and display its definition.
+Use the region or word at point as the default.  TAB in the minibuffer
+calls `completion-at-point', completing with
+`osx-dictionary-completion-at-point-functions' (`cape-dict' by default)
+and displaying the candidates with
+`osx-dictionary-completion-in-region-function' (`consult' when it is
+installed)."
   (interactive)
   (let* ((default (osx-dictionary--region-or-word))
          (prompt  (if default (format "Word (%s): " default)
-                    "Word: "))
-         (word (read-string prompt nil nil default)))
-    (osx-dictionary--view-result word)))
+                    "Word: ")))
+    (osx-dictionary--view-result
+     (osx-dictionary--read-word-with-capf prompt default))))
+
+(defun osx-dictionary--completion-at-point-functions ()
+  "Capfs to complete a looked-up word with, minus the unavailable ones.
+An entry of `osx-dictionary-completion-at-point-functions' naming a
+function that isn't defined -- `cape-dict' without `cape' installed, say
+-- is dropped.  Should that leave nothing at all, the minibuffer keeps
+its own `completion-at-point-functions'."
+  (or (cl-remove-if (lambda (f) (and (symbolp f) (not (fboundp f))))
+                    osx-dictionary-completion-at-point-functions)
+      completion-at-point-functions))
+
+(defun osx-dictionary--completion-in-region-function ()
+  "Function to display word completions with, or nil to keep Emacs' own.
+Resolves the `auto' value of `osx-dictionary-completion-in-region-function'
+to `consult-completion-in-region' when `consult' is installed."
+  (if (eq osx-dictionary-completion-in-region-function 'auto)
+      (and (or (fboundp 'consult-completion-in-region)
+               (require 'consult nil t))
+           #'consult-completion-in-region)
+    osx-dictionary-completion-in-region-function))
+
+(defun osx-dictionary--read-word-with-capf (prompt &optional default)
+  "Read a word with PROMPT, binding TAB to `completion-at-point'.
+Return DEFAULT when the input is empty, and nil when it is empty with no
+DEFAULT.  Completion inside the minibuffer comes from
+`osx-dictionary-completion-at-point-functions', shown by
+`osx-dictionary-completion-in-region-function' -- which, with `consult',
+opens a recursive minibuffer, hence `enable-recursive-minibuffers'."
+  (let ((map (copy-keymap minibuffer-local-map))
+        (capfs (osx-dictionary--completion-at-point-functions))
+        (in-region (osx-dictionary--completion-in-region-function)))
+    (define-key map (kbd "TAB") #'completion-at-point)
+    (define-key map [tab] #'completion-at-point)
+    (let* ((enable-recursive-minibuffers t)
+           (word (minibuffer-with-setup-hook
+                     (lambda ()
+                       (setq-local completion-at-point-functions capfs)
+                       (when in-region
+                         (setq-local completion-in-region-function in-region)))
+                   (read-from-minibuffer prompt nil map nil nil default))))
+      ;; `read-from-minibuffer' only returns DEFAULT for empty input when
+      ;; reading a Lisp object, so substitute it the way `read-string' does.
+      (if (string= word "") default word))))
 
 ;;;###autoload
 (defun osx-dictionary-search-pointer ()
