@@ -75,6 +75,14 @@ for more info."
   :type 'string
   :group 'osx-dictionary)
 
+(defcustom osx-dictionary-voice "Voice 5"
+  "Voice used by `osx-dictionary-read-word'.
+Set to nil to use the macOS default voice.  To list available voices,
+run `say -v \"?\"' in a terminal."
+  :type '(choice (const :tag "macOS default voice" nil)
+                 (string :tag "Voice name"))
+  :group 'osx-dictionary)
+
 (defcustom osx-dictionary-last-dictionary-file
   (locate-user-emacs-file "osx-dictionary-last-dictionary")
   "File used to persist the dictionary chosen by `osx-dictionary-select-dictionary'.
@@ -286,9 +294,13 @@ Turning on Text mode runs the normal hook `osx-dictionary-mode-hook'."
                            (concat "dict://" (osx-dictionary--get-current-word)))))))
 
 (defun osx-dictionary-read-word ()
-  "Read current searched `word' using text-to-speech service."
+  "Read the current word aloud using `osx-dictionary-voice'."
   (interactive)
-  (shell-command (concat "say " (shell-quote-argument (osx-dictionary--get-current-word)))))
+  (shell-command
+   (concat "say "
+           (when osx-dictionary-voice
+             (concat "-v " (shell-quote-argument osx-dictionary-voice) " "))
+           (shell-quote-argument (osx-dictionary--get-current-word)))))
 
 (defvar-local osx-dictionary--current-word nil
   "The word displayed in this `osx-dictionary-mode' buffer.

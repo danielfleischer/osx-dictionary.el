@@ -35,6 +35,10 @@ Inside a result buffer:
 ;; Support Chinese word
 ;; (setq osx-dictionary-use-chinese-text-segmentation t)
 
+;; Voice for reading words aloud (defaults to "Voice 5").
+;; Set to nil for the macOS default; list voices with `say -v "?"` in a terminal.
+;; (setq osx-dictionary-voice "Samantha")
+
 ;; Key bindings
 (global-set-key (kbd "C-c d") 'osx-dictionary-search-word-at-point)
 ;; (global-set-key (kbd "C-c D") 'osx-dictionary-select-dictionary)
